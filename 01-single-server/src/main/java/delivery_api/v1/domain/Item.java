@@ -18,8 +18,8 @@ public class Item {
     @Column(nullable = false)
     private String name;
 
-    @Column(nullable = false, precision = 10, scale = 2)
-    private BigDecimal value;
+    @Column(name = "unit_price", nullable = false, precision = 10, scale = 2)
+    private BigDecimal unitPrice;
 
     public Item() {
     }
@@ -36,8 +36,8 @@ public class Item {
         return name;
     }
 
-    public BigDecimal getValue() {
-        return value;
+    public BigDecimal getUnitPrice() {
+        return unitPrice;
     }
 
     public void setId(Long id) {
@@ -52,7 +52,7 @@ public class Item {
         this.name = name;
     }
 
-    public void setValue(BigDecimal value) {
-        this.value = value;
+    public void setUnitPrice(BigDecimal unitPrice) {
+        this.unitPrice = unitPrice;
     }
 }

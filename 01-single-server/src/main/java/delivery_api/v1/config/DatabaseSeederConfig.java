@@ -29,17 +29,17 @@ public class DatabaseSeederConfig {
             Item burger = new Item();
             burger.setSku("BURGER-001");
             burger.setName("Burger Artesanal");
-            burger.setValue(new BigDecimal("29.90"));
+            burger.setUnitPrice(new BigDecimal("29.90"));
 
             Item fries = new Item();
             fries.setSku("FRIES-001");
             fries.setName("Batata Frita");
-            fries.setValue(new BigDecimal("14.90"));
+            fries.setUnitPrice(new BigDecimal("14.90"));
 
             Item soda = new Item();
             soda.setSku("SODA-001");
             soda.setName("Refrigerante Lata");
-            soda.setValue(new BigDecimal("7.50"));
+            soda.setUnitPrice(new BigDecimal("7.50"));
 
             itemRepository.saveAll(List.of(burger, fries, soda));
 
@@ -48,17 +48,17 @@ public class DatabaseSeederConfig {
             CartItem burgerCartItem = new CartItem();
             burgerCartItem.setItem(burger);
             burgerCartItem.setQuantity(2);
-            burgerCartItem.setUnitValue(burger.getValue());
+            burgerCartItem.setUnitValue(burger.getUnitPrice());
 
             CartItem friesCartItem = new CartItem();
             friesCartItem.setItem(fries);
             friesCartItem.setQuantity(1);
-            friesCartItem.setUnitValue(fries.getValue());
+            friesCartItem.setUnitValue(fries.getUnitPrice());
 
             CartItem sodaCartItem = new CartItem();
             sodaCartItem.setItem(soda);
             sodaCartItem.setQuantity(2);
-            sodaCartItem.setUnitValue(soda.getValue());
+            sodaCartItem.setUnitValue(soda.getUnitPrice());
 
             cart.addItem(burgerCartItem);
             cart.addItem(friesCartItem);

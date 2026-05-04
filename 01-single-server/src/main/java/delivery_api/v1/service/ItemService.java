@@ -20,7 +20,7 @@ public class ItemService {
         Item item = new Item();
         item.setSku(request.sku());
         item.setName(request.name());
-        item.setValue(request.value());
+        item.setUnitPrice(request.value());
 
         return itemRepository.save(item);
     }

@@ -71,7 +71,7 @@ public class CartService {
         CartItem cartItem = new CartItem();
         cartItem.setItem(item);
         cartItem.setQuantity(request.quantity());
-        cartItem.setUnitValue(item.getValue());
+        cartItem.setUnitValue(item.getUnitPrice());
 
         cart.addItem(cartItem);
 
