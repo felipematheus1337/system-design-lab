@@ -5,6 +5,7 @@ import delivery_api.v1.domain.Cart;
 import delivery_api.v1.domain.CartItem;
 import delivery_api.v1.domain.Item;
 import delivery_api.v1.domain.Person;
+import delivery_api.v1.exception.BusinessException;
 import delivery_api.v1.repository.CartRepository;
 import delivery_api.v1.repository.ItemRepository;
 import delivery_api.v1.repository.PersonRepository;
@@ -55,7 +56,7 @@ public class CartService {
     @Transactional
     public Cart addItemToCart(Long personId, AddCartItemRequest request) {
         Person person = personRepository.findById(personId)
-                .orElseThrow(() -> new RuntimeException("Person not found"));
+                .orElseThrow(() -> new BusinessException("Person not found with id: " + personId));
 
         Cart cart = person.getCart();
 
@@ -66,7 +67,7 @@ public class CartService {
         }
 
         Item item = itemRepository.findById(request.itemId())
-                .orElseThrow(() -> new RuntimeException("Item not found"));
+                .orElseThrow(() -> new BusinessException("Item not found with id: " + request.itemId()));
 
         CartItem cartItem = new CartItem();
         cartItem.setItem(item);
@@ -83,13 +84,13 @@ public class CartService {
     @Transactional
     public void removeItemFromCart(Long personId, Long cartItemId) {
         Cart cart = cartRepository.findByPersonId(personId)
-                .orElseThrow(() -> new RuntimeException("Cart not found"));
+                .orElseThrow(() -> new BusinessException("Cart not found"));
 
         CartItem cartItemToRemove = cart.getItems()
                 .stream()
                 .filter(cartItem -> cartItem.getId().equals(cartItemId))
                 .findFirst()
-                .orElseThrow(() -> new RuntimeException("Cart item not found"));
+                .orElseThrow(() -> new BusinessException("CartItem not found"));
 
         cart.removeItem(cartItemToRemove);
 

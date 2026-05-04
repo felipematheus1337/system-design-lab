@@ -5,6 +5,6 @@ import java.math.BigDecimal;
 public record CreateItemRequest(
         String sku,
         String name,
-        BigDecimal value
+        BigDecimal unitPrice
 ) {
 }

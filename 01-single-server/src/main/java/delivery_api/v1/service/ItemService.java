@@ -2,6 +2,7 @@ package delivery_api.v1.service;
 
 import delivery_api.v1.controller.request.CreateItemRequest;
 import delivery_api.v1.domain.Item;
+import delivery_api.v1.exception.BusinessException;
 import delivery_api.v1.repository.ItemRepository;
 import org.springframework.stereotype.Service;
 
@@ -17,10 +18,15 @@ public class ItemService {
     }
 
     public Item create(CreateItemRequest request) {
+        itemRepository.findBySku(request.sku())
+                .ifPresent(item -> {
+                    throw new BusinessException("SKU already exists: " + request.sku());
+                });
+
         Item item = new Item();
         item.setSku(request.sku());
         item.setName(request.name());
-        item.setUnitPrice(request.value());
+        item.setUnitPrice(request.unitPrice());
 
         return itemRepository.save(item);
     }
@@ -31,6 +37,6 @@ public class ItemService {
 
     public Item findById(Long id) {
         return itemRepository.findById(id)
-                .orElseThrow(() -> new RuntimeException("Item not found"));
+                .orElseThrow(() -> new BusinessException("Item not found with id: " + id));
     }
 }
