@@ -11,11 +11,5 @@ public class V1Application {
 		SpringApplication.run(V1Application.class, args);
 	}
 
-	CommandLineRunner commandLineRunner = new CommandLineRunner() {
-		@Override
-		public void run(String... args) throws Exception {
-
-		}
-	};
 
 }
