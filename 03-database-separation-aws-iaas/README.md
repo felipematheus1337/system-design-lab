@@ -1,79 +1,100 @@
-# 03 — Database Separation
+# 03 — Database Separation AWS IaaS
 
-> Laboratório de System Design para separar a aplicação do banco de dados, substituindo o H2 em memória por um PostgreSQL executando em container via Docker Compose.
+> Laboratório de System Design para evoluir a separação entre aplicação e banco de dados para um cenário em **AWS IaaS**, usando **EC2 pública com Docker** e **Amazon RDS PostgreSQL privado**.
 
-Este módulo faz parte do repositório **system-design-lab** e representa a evolução natural do laboratório anterior de aplicação monolítica local. A regra de negócio principal continua sendo o fluxo de carrinho de uma API de delivery, mas agora a persistência deixa de ser feita em banco embarcado/in-memory e passa a usar um banco relacional externo.
+Este módulo faz parte do repositório **system-design-lab** e representa a evolução do laboratório `03-database-separation`, onde a aplicação deixou de usar H2 e passou a se conectar a um PostgreSQL externo. Agora, a mesma ideia foi levada para a AWS.
+
+A regra de negócio principal continua sendo o fluxo de carrinho de uma API de delivery, mas a infraestrutura passa a simular um cenário mais próximo de produção:
+
+```text
+Usuário
+  ↓ HTTP 8080
+Internet Gateway
+  ↓
+EC2 pública rodando Spring Boot em Docker
+  ↓ TCP 5432
+RDS PostgreSQL em subnet privada
+```
+
+---
+
+## Arquitetura
+
+![Arquitetura AWS IaaS](./arquitetura-aws-iaas.bmp)
+
+### Visão conceitual
+
+```text
+Usuário/Postman
+  ↓
+Internet
+  ↓
+Internet Gateway
+  ↓
+Subnet pública
+  ↓
+EC2 com Docker
+  ↓
+Container Spring Boot
+  ↓
+Security Group liberando TCP 5432 somente da EC2
+  ↓
+Subnet privada
+  ↓
+Amazon RDS PostgreSQL
+```
 
 ---
 
 ## Objetivo do módulo
 
-O foco deste laboratório não é adicionar novas regras de negócio complexas. O objetivo principal é praticar um passo essencial em System Design:
+O objetivo deste laboratório é praticar um passo essencial em System Design e Cloud:
 
 ```text
-Aplicação Spring Boot  --->  PostgreSQL externo
+Aplicação em compute separado
+        ↓
+Banco de dados gerenciado e isolado em rede privada
 ```
 
-Antes, a aplicação usava **H2 Database**, um banco em memória útil para testes rápidos e protótipos. Neste módulo, o H2 foi removido e substituído por um **PostgreSQL isolado em container**, criado com Docker Compose.
+Neste módulo, a aplicação Spring Boot é empacotada em uma imagem Docker, enviada para o Docker Hub e executada em uma instância EC2 pública.
 
-Com isso, o projeto começa a se aproximar de uma arquitetura mais realista, onde aplicação e banco são componentes separados.
+O banco de dados deixa de ser um container local via Docker Compose e passa a ser um **Amazon RDS PostgreSQL**, criado em subnets privadas e acessível apenas pela EC2.
 
 ---
 
 ## O que mudou em relação ao laboratório anterior
 
-| Antes | Agora |
+| Antes — `03-database-separation` | Agora — `03-database-separation-aws-iaas` |
 |---|---|
-| Banco H2 em memória | PostgreSQL em container |
-| Dados voláteis ao reiniciar a aplicação | Dados persistidos em volume Docker |
-| Banco acoplado ao runtime da aplicação | Banco separado da aplicação |
-| Configuração mais simples para protótipo | Configuração mais próxima de ambiente real |
-| Menor fidelidade com produção | Melhor base para evoluir para cloud |
-
----
-
-## Arquitetura do laboratório
-
-```mermaid
-flowchart LR
-    Client[Postman / Insomnia] --> API[Spring Boot API]
-    API --> JPA[Spring Data JPA / Hibernate]
-    JPA --> DB[(PostgreSQL Container)]
-    DB --> Volume[(Docker Volume)]
-```
-
-### Visão conceitual
-
-```text
-Usuário testa a API no Postman
-        ↓
-Spring Boot recebe a requisição
-        ↓
-Controller chama o fluxo de aplicação
-        ↓
-Repository usa Spring Data JPA
-        ↓
-Hibernate gera SQL
-        ↓
-PostgreSQL persiste os dados
-        ↓
-Volume Docker mantém os dados do banco
-```
+| Spring Boot rodando localmente | Spring Boot rodando em Docker dentro de uma EC2 |
+| PostgreSQL em Docker Compose local | PostgreSQL em Amazon RDS |
+| Banco acessível via `localhost` | Banco acessível via endpoint privado do RDS |
+| Rede local da máquina | VPC, subnets, route tables e security groups |
+| Dependência local com Docker Compose | Infraestrutura AWS IaaS |
+| Testes em `localhost:8080` | Testes no IP público da EC2 na porta `8080` |
 
 ---
 
 ## Tecnologias utilizadas
 
-- Java
+- Java 21
 - Spring Boot
 - Spring Web
 - Spring Data JPA
 - Hibernate
 - PostgreSQL
+- Amazon EC2
+- Amazon RDS PostgreSQL
+- Amazon VPC
+- Subnet pública
+- Subnets privadas
+- Internet Gateway
+- Route Table
+- Security Groups
 - Docker
-- Docker Compose
+- Docker Hub
 - Maven
-- Postman ou Insomnia para testes
+- Postman ou Insomnia
 
 ---
 
@@ -177,68 +198,26 @@ Isso evita que o cliente da API manipule o preço do produto na requisição.
 
 ## Estrutura esperada do módulo
 
-Uma estrutura possível para este laboratório:
-
 ```text
-03-database-separation
+03-database-separation-aws-iaas
 ├── src
 │   └── main
 │       ├── java
 │       └── resources
 │           └── application.yml
-├── docker-compose.yml
+├── arquitetura-aws-iaas.bmp
+├── Dockerfile
 ├── pom.xml
 └── README.md
 ```
 
 ---
 
-## Configuração do PostgreSQL com Docker Compose
-
-Exemplo de `docker-compose.yml`:
-
-```yaml
-services:
-  postgres:
-    image: postgres:16
-    container_name: postgres-local
-    restart: unless-stopped
-
-    ports:
-      - "${POSTGRES_PORT}:5432"
-
-    environment:
-      POSTGRES_DB: ${POSTGRES_DB}
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-
-volumes:
-  postgres_data:
-```
-
----
-
-## Variáveis de ambiente
-
-Crie um arquivo `.env` na raiz do módulo:
-
-```env
-POSTGRES_DB=delivery_db
-POSTGRES_USER=delivery_user
-POSTGRES_PASSWORD=delivery_pass
-POSTGRES_PORT=5432
-```
-
-> O arquivo `.env` facilita a configuração local e evita deixar credenciais fixas diretamente no `docker-compose.yml`.
-
----
-
 ## Configuração da aplicação
 
-Exemplo de `application.yml` usando PostgreSQL:
+O `application.yml` deve receber as configurações do banco por variáveis de ambiente.
+
+Exemplo:
 
 ```yaml
 spring:
@@ -246,13 +225,13 @@ spring:
     name: delivery-api
 
   datasource:
-    url: jdbc:postgresql://localhost:${POSTGRES_PORT}/${POSTGRES_DB}
-    username: ${POSTGRES_USER}
-    password: ${POSTGRES_PASSWORD}
+    url: ${SPRING_DATASOURCE_URL}
+    username: ${SPRING_DATASOURCE_USERNAME}
+    password: ${SPRING_DATASOURCE_PASSWORD}
 
   jpa:
     hibernate:
-      ddl-auto: create-drop
+      ddl-auto: update
     show-sql: true
     properties:
       hibernate:
@@ -262,70 +241,415 @@ server:
   port: 8080
 ```
 
-### Observação sobre `ddl-auto`
+### Por que usar variáveis de ambiente?
 
-Neste laboratório, `ddl-auto: create-drop` pode ser usado para estudo, porque recria as tabelas automaticamente ao subir a aplicação.
-
-Para um ambiente mais próximo de produção, o ideal seria evoluir para:
-
-```yaml
-spring:
-  jpa:
-    hibernate:
-      ddl-auto: validate
-```
-
-E controlar a evolução do schema com uma ferramenta como **Flyway** ou **Liquibase**.
-
----
-
-## Como executar o projeto
-
-### 1. Subir o PostgreSQL
-
-Na pasta do módulo:
-
-```bash
-docker compose up -d
-```
-
-Verifique se o container subiu:
-
-```bash
-docker ps
-```
-
-Você deve ver algo parecido com:
+Porque a mesma imagem Docker pode rodar em ambientes diferentes:
 
 ```text
-postgres-local   postgres:16   Up   0.0.0.0:5432->5432/tcp
+Local
+EC2
+Ambiente de teste
+Ambiente de produção
+```
+
+Sem precisar rebuildar a imagem.
+
+Na EC2, por exemplo, a URL do banco aponta para o endpoint do RDS:
+
+```text
+jdbc:postgresql://endpoint-do-rds.amazonaws.com:5432/deliverydb
 ```
 
 ---
 
-### 2. Rodar a aplicação Spring Boot
+## Dockerfile
 
-Com o PostgreSQL rodando, execute:
+Exemplo de `Dockerfile` usado para empacotar a aplicação:
 
-```bash
-mvn spring-boot:run
+```dockerfile
+FROM eclipse-temurin:21-jdk-alpine
+
+WORKDIR /app
+
+COPY target/*.jar app.jar
+
+EXPOSE 8080
+
+ENTRYPOINT ["java", "-jar", "app.jar"]
 ```
 
-Ou, se preferir gerar o pacote:
+### Fluxo do Dockerfile
+
+```text
+1. Usa uma imagem base com Java 21.
+2. Define o diretório de trabalho como /app.
+3. Copia o JAR gerado pelo Maven.
+4. Expõe a porta 8080.
+5. Executa a aplicação com java -jar.
+```
+
+---
+
+## Build da aplicação
+
+Na raiz do módulo:
 
 ```bash
 mvn clean package
-java -jar target/*.jar
+```
+
+Se quiser pular os testes temporariamente durante o laboratório:
+
+```bash
+mvn clean package -DskipTests
+```
+
+O JAR será gerado dentro da pasta:
+
+```text
+target/
 ```
 
 ---
 
-### 3. Acessar a API
+## Build da imagem Docker
+
+```bash
+docker build -t delivery-api-database-separation-aws .
+```
+
+Verificar se a imagem foi criada:
+
+```bash
+docker images
+```
+
+---
+
+## Tag da imagem para Docker Hub
+
+Substitua `felipematheus1337` pelo usuário correto do Docker Hub, se necessário.
+
+```bash
+docker tag delivery-api-database-separation-aws felipematheus1337/delivery-api-database-separation-aws:1.0
+```
+
+Também é possível criar uma tag `latest`:
+
+```bash
+docker tag delivery-api-database-separation-aws felipematheus1337/delivery-api-database-separation-aws:latest
+```
+
+---
+
+## Push para Docker Hub
+
+Faça login:
+
+```bash
+docker login
+```
+
+Envie a imagem:
+
+```bash
+docker push felipematheus1337/delivery-api-database-separation-aws:1.0
+```
+
+```bash
+docker push felipematheus1337/delivery-api-database-separation-aws:latest
+```
+
+A partir daqui, a EC2 consegue baixar a imagem com:
+
+```bash
+docker pull felipematheus1337/delivery-api-database-separation-aws:latest
+```
+
+---
+
+## Infraestrutura AWS criada
+
+### VPC
+
+```text
+VPC: delivery-lab-vpc
+CIDR: 10.0.0.0/16
+```
+
+A VPC representa a rede privada do laboratório dentro da AWS.
+
+---
+
+### Subnet pública
+
+```text
+Subnet pública: delivery-public-subnet-a
+CIDR sugerido: 10.0.1.0/24
+```
+
+Responsabilidade:
+
+```text
+Hospedar a EC2 que recebe requisições HTTP pela internet.
+```
+
+---
+
+### Subnets privadas
+
+```text
+Subnet privada A: delivery-private-db-subnet-a
+CIDR sugerido: 10.0.2.0/24
+
+Subnet privada B: delivery-private-db-subnet-b
+CIDR sugerido: 10.0.3.0/24
+```
+
+Responsabilidade:
+
+```text
+Hospedar o RDS em uma camada privada, sem exposição pública.
+```
+
+O RDS normalmente usa um DB Subnet Group com subnets em mais de uma Availability Zone.
+
+---
+
+### Internet Gateway
+
+```text
+Internet Gateway: delivery-lab-igw
+```
+
+Responsabilidade:
+
+```text
+Permitir que a subnet pública tenha entrada e saída para a internet.
+```
+
+---
+
+### Route Table pública
+
+Rota principal:
+
+```text
+Destination: 0.0.0.0/0
+Target: Internet Gateway
+```
+
+Responsabilidade:
+
+```text
+Transformar a subnet da EC2 em uma subnet pública.
+```
+
+---
+
+### Security Group da EC2
+
+Inbound:
+
+```text
+SSH
+Porta: 22
+Origem: seu IP /32
+```
+
+```text
+HTTP da aplicação
+Porta: 8080
+Origem: 0.0.0.0/0
+```
+
+Outbound:
+
+```text
+All traffic
+Destino: 0.0.0.0/0
+```
+
+Responsabilidade:
+
+```text
+Permitir acesso SSH administrativo e acesso HTTP à API.
+```
+
+---
+
+### Security Group do RDS
+
+Inbound:
+
+```text
+PostgreSQL
+Porta: 5432
+Origem: Security Group da EC2
+```
+
+Responsabilidade:
+
+```text
+Permitir conexão ao banco somente a partir da EC2.
+```
+
+Esse é um dos pontos mais importantes do laboratório:
+
+```text
+O banco não fica público.
+O banco não aceita conexão de qualquer IP.
+Apenas a aplicação na EC2 consegue se conectar ao RDS.
+```
+
+---
+
+## Criação do RDS PostgreSQL
+
+Configuração usada no laboratório:
+
+```text
+Engine: PostgreSQL
+Public access: No
+Port: 5432
+DB name: deliverydb
+VPC: delivery-lab-vpc
+Subnet Group: subnets privadas
+Security Group: delivery-rds-sg
+```
+
+Após a criação, o RDS fornece um endpoint parecido com:
+
+```text
+delivery-postgres.xxxxxxxxx.us-east-1.rds.amazonaws.com
+```
+
+Esse endpoint é usado na variável:
+
+```text
+SPRING_DATASOURCE_URL
+```
+
+---
+
+## Criação da EC2
+
+Configuração usada no laboratório:
+
+```text
+AMI: Amazon Linux 2023
+Instance type: t2.micro ou t3.micro
+Subnet: pública
+Auto-assign public IP: enabled
+Security Group: delivery-ec2-sg
+```
+
+A EC2 representa a camada de aplicação.
+
+---
+
+## Instalação do Docker na EC2
+
+Acessar a EC2 via SSH:
+
+```bash
+ssh -i sua-chave.pem ec2-user@IP_PUBLICO_DA_EC2
+```
+
+Instalar Docker:
+
+```bash
+sudo yum update -y
+```
+
+```bash
+sudo yum install docker -y
+```
+
+```bash
+sudo systemctl start docker
+```
+
+```bash
+sudo systemctl enable docker
+```
+
+Adicionar o usuário ao grupo Docker:
+
+```bash
+sudo usermod -aG docker ec2-user
+```
+
+Depois saia e entre novamente no SSH, ou rode:
+
+```bash
+newgrp docker
+```
+
+Validar instalação:
+
+```bash
+docker --version
+```
+
+---
+
+## Executar a aplicação na EC2
+
+Baixar a imagem:
+
+```bash
+docker pull felipematheus1337/delivery-api-database-separation-aws:latest
+```
+
+Rodar o container apontando para o RDS:
+
+```bash
+docker run -d \
+  --name delivery-api \
+  -p 8080:8080 \
+  -e SPRING_DATASOURCE_URL=jdbc:postgresql://SEU_ENDPOINT_RDS:5432/deliverydb \
+  -e SPRING_DATASOURCE_USERNAME=postgres \
+  -e SPRING_DATASOURCE_PASSWORD=SUA_SENHA \
+  felipematheus1337/delivery-api-database-separation-aws:latest
+```
+
+Ver logs da aplicação:
+
+```bash
+docker logs -f delivery-api
+```
+
+Se tudo estiver correto, a aplicação deve iniciar na porta `8080`.
+
+---
+
+## Testar a API na AWS
 
 Base URL:
 
 ```text
-http://localhost:8080
+http://IP_PUBLICO_DA_EC2:8080
+```
+
+Exemplo:
+
+```http
+GET http://IP_PUBLICO_DA_EC2:8080/api/v1/items
+```
+
+Se a aplicação responder, o fluxo completo funcionou:
+
+```text
+Postman
+  ↓
+IP público da EC2
+  ↓
+Container Spring Boot
+  ↓
+Endpoint privado do RDS
+  ↓
+PostgreSQL
 ```
 
 ---
@@ -352,7 +676,7 @@ http://localhost:8080
 ### 1. Criar produto
 
 ```http
-POST http://localhost:8080/api/v1/items
+POST http://IP_PUBLICO_DA_EC2:8080/api/v1/items
 Content-Type: application/json
 ```
 
@@ -369,7 +693,7 @@ Content-Type: application/json
 ### 2. Criar outro produto
 
 ```http
-POST http://localhost:8080/api/v1/items
+POST http://IP_PUBLICO_DA_EC2:8080/api/v1/items
 Content-Type: application/json
 ```
 
@@ -386,7 +710,7 @@ Content-Type: application/json
 ### 3. Listar produtos
 
 ```http
-GET http://localhost:8080/api/v1/items
+GET http://IP_PUBLICO_DA_EC2:8080/api/v1/items
 ```
 
 Resposta esperada aproximada:
@@ -413,7 +737,7 @@ Resposta esperada aproximada:
 ### 4. Criar pessoa
 
 ```http
-POST http://localhost:8080/api/v1/persons
+POST http://IP_PUBLICO_DA_EC2:8080/api/v1/persons
 Content-Type: application/json
 ```
 
@@ -437,7 +761,7 @@ Content-Type: application/json
 ### 5. Criar carrinho para a pessoa
 
 ```http
-POST http://localhost:8080/api/v1/carts/persons/1
+POST http://IP_PUBLICO_DA_EC2:8080/api/v1/carts/persons/1
 Content-Type: application/json
 ```
 
@@ -448,7 +772,7 @@ Não é necessário enviar body.
 ### 6. Adicionar produto ao carrinho
 
 ```http
-POST http://localhost:8080/api/v1/carts/persons/1/items
+POST http://IP_PUBLICO_DA_EC2:8080/api/v1/carts/persons/1/items
 Content-Type: application/json
 ```
 
@@ -464,7 +788,7 @@ Content-Type: application/json
 ### 7. Adicionar outro produto ao carrinho
 
 ```http
-POST http://localhost:8080/api/v1/carts/persons/1/items
+POST http://IP_PUBLICO_DA_EC2:8080/api/v1/carts/persons/1/items
 Content-Type: application/json
 ```
 
@@ -480,7 +804,7 @@ Content-Type: application/json
 ### 8. Consultar carrinho
 
 ```http
-GET http://localhost:8080/api/v1/carts/persons/1
+GET http://IP_PUBLICO_DA_EC2:8080/api/v1/carts/persons/1
 ```
 
 Resposta esperada aproximada:
@@ -525,7 +849,7 @@ Resposta esperada aproximada:
 Use o `id` do `CartItem`, não o `itemId` do produto.
 
 ```http
-DELETE http://localhost:8080/api/v1/carts/persons/1/items/2
+DELETE http://IP_PUBLICO_DA_EC2:8080/api/v1/carts/persons/1/items/2
 ```
 
 ---
@@ -533,7 +857,7 @@ DELETE http://localhost:8080/api/v1/carts/persons/1/items/2
 ### 10. Consultar carrinho novamente
 
 ```http
-GET http://localhost:8080/api/v1/carts/persons/1
+GET http://IP_PUBLICO_DA_EC2:8080/api/v1/carts/persons/1
 ```
 
 Agora o carrinho deve retornar sem o item removido.
@@ -543,162 +867,199 @@ Agora o carrinho deve retornar sem o item removido.
 ## Ordem resumida de testes
 
 ```text
-1. POST   /api/v1/items
-2. POST   /api/v1/items
-3. GET    /api/v1/items
-
-4. POST   /api/v1/persons
-5. GET    /api/v1/persons
-
-6. POST   /api/v1/carts/persons/1
-7. POST   /api/v1/carts/persons/1/items
-8. POST   /api/v1/carts/persons/1/items
-9. GET    /api/v1/carts/persons/1
+1.  POST   /api/v1/items
+2.  POST   /api/v1/items
+3.  GET    /api/v1/items
+4.  POST   /api/v1/persons
+5.  GET    /api/v1/persons
+6.  POST   /api/v1/carts/persons/1
+7.  POST   /api/v1/carts/persons/1/items
+8.  POST   /api/v1/carts/persons/1/items
+9.  GET    /api/v1/carts/persons/1
 10. DELETE /api/v1/carts/persons/1/items/2
 11. GET    /api/v1/carts/persons/1
 ```
 
 ---
 
-## Como verificar os dados no PostgreSQL
+## Troubleshooting
 
-Você pode entrar no container:
+### A aplicação não conecta no RDS
 
-```bash
-docker exec -it postgres-local psql -U delivery_user -d delivery_db
-```
+Verifique:
 
-Listar tabelas:
-
-```sql
-\dt
-```
-
-Consultar produtos:
-
-```sql
-SELECT * FROM item;
-```
-
-Consultar pessoas:
-
-```sql
-SELECT * FROM person;
-```
-
-Consultar carrinhos:
-
-```sql
-SELECT * FROM cart;
-```
-
-Consultar itens do carrinho:
-
-```sql
-SELECT * FROM cart_item;
-```
-
-Sair do `psql`:
-
-```sql
-\q
+```text
+1. O endpoint do RDS está correto?
+2. A porta 5432 está correta?
+3. O nome do banco está correto?
+4. Usuário e senha estão corretos?
+5. O RDS está na mesma VPC da EC2?
+6. O Security Group do RDS libera PostgreSQL a partir do Security Group da EC2?
+7. O RDS terminou de inicializar?
 ```
 
 ---
 
-## Comandos úteis do Docker
+### Não consigo acessar a API pelo navegador/Postman
 
-Subir o banco:
+Verifique:
 
-```bash
-docker compose up -d
+```text
+1. A EC2 tem IP público?
+2. A EC2 está em subnet pública?
+3. A subnet pública está associada à Route Table com rota para o Internet Gateway?
+4. O Security Group da EC2 libera a porta 8080?
+5. O container está rodando?
+6. A aplicação iniciou sem erro?
 ```
 
-Ver logs do PostgreSQL:
+Comandos úteis na EC2:
 
 ```bash
-docker logs -f postgres-local
+docker ps
 ```
-
-Parar o banco:
 
 ```bash
-docker compose stop
+docker logs -f delivery-api
 ```
-
-Parar e remover container, mantendo volume:
 
 ```bash
-docker compose down
+curl localhost:8080/api/v1/items
 ```
 
-Parar e remover container junto com os dados persistidos:
+---
+
+### Porta 8080 não responde
+
+Confira se o container foi iniciado com:
 
 ```bash
-docker compose down -v
+-p 8080:8080
 ```
 
-> Use `docker compose down -v` apenas quando quiser apagar o banco local e começar do zero.
+E se a aplicação está configurada com:
+
+```yaml
+server:
+  port: 8080
+```
 
 ---
 
 ## Principais aprendizados deste módulo
 
-- Separar aplicação e banco é um passo importante rumo a uma arquitetura mais realista.
-- H2 é excelente para protótipos, mas PostgreSQL representa melhor um cenário próximo de produção.
-- Docker Compose facilita subir dependências locais sem instalar tudo diretamente na máquina.
-- Volumes Docker permitem persistir os dados mesmo após parar o container.
-- A aplicação Spring Boot passa a depender da disponibilidade do PostgreSQL para iniciar corretamente.
-- Configurações por variável de ambiente deixam o projeto mais flexível e menos acoplado à máquina local.
+- Separar aplicação e banco é um passo importante para sair do ambiente puramente local.
+- A EC2 representa a camada de aplicação.
+- O RDS representa a camada de persistência gerenciada.
+- A subnet pública permite que a aplicação receba tráfego externo.
+- A subnet privada protege o banco de dados.
+- O Internet Gateway permite tráfego entre internet e recursos públicos da VPC.
+- Security Groups controlam quem pode acessar a EC2 e quem pode acessar o RDS.
+- O banco não precisa estar público para a aplicação acessá-lo.
+- O Docker Hub permite distribuir a imagem da aplicação para a EC2.
+- Variáveis de ambiente evitam acoplar a imagem Docker a uma configuração específica.
 
 ---
 
-## Próximos passos possíveis
+## Checklist mental
 
-Este módulo pode evoluir para:
+```text
+Builda → Tagueia → Publica → Cria rede → Cria banco → Cria EC2 → Puxa imagem → Roda container → Testa
+```
 
-- Dockerizar também a aplicação Spring Boot.
-- Criar um `docker-compose.yml` com API + PostgreSQL.
-- Adicionar Flyway ou Liquibase para versionamento do banco.
-- Criar DTOs para evitar retorno direto de entidades JPA.
-- Adicionar validações com Bean Validation.
-- Criar tratamento global de erros com `@RestControllerAdvice`.
-- Separar leitura e escrita em cenários futuros.
-- Adicionar Redis como cache.
-- Adicionar mensageria com RabbitMQ ou Kafka.
-- Evoluir para implantação em AWS usando EC2, RDS, Security Groups e subnets.
+Fluxo completo:
+
+```text
+1. mvn clean package
+2. docker build
+3. docker tag
+4. docker push
+5. criar VPC
+6. criar subnet pública
+7. criar subnets privadas
+8. criar Internet Gateway
+9. criar Route Table pública
+10. criar Security Group da EC2
+11. criar Security Group do RDS
+12. criar DB Subnet Group
+13. criar RDS PostgreSQL privado
+14. criar EC2 pública
+15. instalar Docker na EC2
+16. docker pull
+17. docker run com env vars do RDS
+18. testar pelo IP público da EC2
+```
+
+---
+
+## Como deletar os recursos para evitar custos
+
+Ao terminar o laboratório, remova os recursos nesta ordem:
+
+```text
+1. Parar e remover o container da EC2.
+2. Terminar a EC2.
+3. Deletar o RDS.
+4. Deletar snapshots manuais, se tiver criado.
+5. Deletar o DB Subnet Group.
+6. Deletar Security Groups criados.
+7. Deletar Route Tables customizadas.
+8. Desanexar e deletar o Internet Gateway.
+9. Deletar subnets.
+10. Deletar a VPC.
+```
+
+Comandos na EC2 antes de terminar a instância:
+
+```bash
+docker stop delivery-api
+```
+
+```bash
+docker rm delivery-api
+```
 
 ---
 
 ## Relação com System Design
 
-Este laboratório representa a transição de uma aplicação simples para uma arquitetura com componentes separados.
+Este laboratório representa a transição de uma separação local para uma separação em infraestrutura real de cloud.
 
 ```text
 Módulo 01: aplicação simples local
 Módulo 02: load balancer local com Nginx
-Módulo 03: separação entre aplicação e banco de dados
+Módulo 03: separação entre aplicação e banco de dados local
+Módulo 03 AWS IaaS: aplicação em EC2 + banco em RDS privado
 ```
 
 A partir daqui, fica mais fácil evoluir para cenários como:
 
 ```text
-API em uma instância/container
-Banco em outra instância/container
-Rede controlada entre aplicação e banco
-Persistência independente do ciclo de vida da aplicação
-Migração futura para banco gerenciado, como Amazon RDS
+Application Load Balancer
+Auto Scaling Group
+Subnets privadas para aplicação
+NAT Gateway ou NAT Instance
+Observabilidade
+Cache com Redis
+Mensageria
+CI/CD
+Infraestrutura como código com Terraform
 ```
 
 ---
 
 ## Observação final
 
-Este projeto continua sendo um laboratório didático. A principal evolução deste módulo é trocar o banco embarcado por um banco externo, mantendo a regra de negócio simples para que o foco fique claro:
+Este projeto continua sendo um laboratório didático.
+
+A principal evolução deste módulo é levar a separação entre aplicação e banco para a AWS:
 
 ```text
-Separar responsabilidades de infraestrutura.
-A aplicação executa a regra de negócio.
-O PostgreSQL persiste os dados.
-O Docker Compose orquestra a dependência local.
+A aplicação executa em uma EC2 pública.
+O banco executa em um RDS privado.
+O Docker empacota a aplicação.
+O Docker Hub distribui a imagem.
+A VPC, as subnets e os Security Groups controlam a comunicação.
 ```
+
+Esse é um passo fundamental para entender como aplicações reais começam a ser organizadas em cloud.
