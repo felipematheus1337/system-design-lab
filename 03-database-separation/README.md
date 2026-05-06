@@ -1,24 +1,64 @@
-# Delivery API — Cart Flow Lab
+# 03 — Database Separation
 
-Projeto de laboratório para praticar modelagem de domínio, criação de API REST, persistência com JPA/Hibernate e fluxo de carrinho em uma aplicação de delivery.
+> Laboratório de System Design para separar a aplicação do banco de dados, substituindo o H2 em memória por um PostgreSQL executando em container via Docker Compose.
 
-Este projeto faz parte de uma sequência maior de estudos em **System Design**, com foco inicial em uma aplicação simples rodando localmente. A ideia é evoluir gradualmente para cenários mais próximos de produção, como separação de banco, cache, mensageria, observabilidade, balanceamento de carga e, posteriormente, migração para cloud.
+Este módulo faz parte do repositório **system-design-lab** e representa a evolução natural do laboratório anterior de aplicação monolítica local. A regra de negócio principal continua sendo o fluxo de carrinho de uma API de delivery, mas agora a persistência deixa de ser feita em banco embarcado/in-memory e passa a usar um banco relacional externo.
 
 ---
 
-## Objetivo do projeto
+## Objetivo do módulo
 
-O objetivo deste módulo é implementar um fluxo básico de delivery:
+O foco deste laboratório não é adicionar novas regras de negócio complexas. O objetivo principal é praticar um passo essencial em System Design:
 
-1. Cadastrar produtos disponíveis no catálogo.
-2. Cadastrar uma pessoa/cliente.
-3. Criar um carrinho para essa pessoa.
-4. Adicionar produtos existentes ao carrinho.
-5. Consultar o carrinho com os itens adicionados.
-6. Remover itens do carrinho.
+```text
+Aplicação Spring Boot  --->  PostgreSQL externo
+```
 
-A regra principal é: **o frontend não envia o preço do produto ao adicionar no carrinho**.  
-O backend recebe apenas o `itemId` e a `quantity`, busca o preço oficial no banco e grava esse valor no item do carrinho.
+Antes, a aplicação usava **H2 Database**, um banco em memória útil para testes rápidos e protótipos. Neste módulo, o H2 foi removido e substituído por um **PostgreSQL isolado em container**, criado com Docker Compose.
+
+Com isso, o projeto começa a se aproximar de uma arquitetura mais realista, onde aplicação e banco são componentes separados.
+
+---
+
+## O que mudou em relação ao laboratório anterior
+
+| Antes | Agora |
+|---|---|
+| Banco H2 em memória | PostgreSQL em container |
+| Dados voláteis ao reiniciar a aplicação | Dados persistidos em volume Docker |
+| Banco acoplado ao runtime da aplicação | Banco separado da aplicação |
+| Configuração mais simples para protótipo | Configuração mais próxima de ambiente real |
+| Menor fidelidade com produção | Melhor base para evoluir para cloud |
+
+---
+
+## Arquitetura do laboratório
+
+```mermaid
+flowchart LR
+    Client[Postman / Insomnia] --> API[Spring Boot API]
+    API --> JPA[Spring Data JPA / Hibernate]
+    JPA --> DB[(PostgreSQL Container)]
+    DB --> Volume[(Docker Volume)]
+```
+
+### Visão conceitual
+
+```text
+Usuário testa a API no Postman
+        ↓
+Spring Boot recebe a requisição
+        ↓
+Controller chama o fluxo de aplicação
+        ↓
+Repository usa Spring Data JPA
+        ↓
+Hibernate gera SQL
+        ↓
+PostgreSQL persiste os dados
+        ↓
+Volume Docker mantém os dados do banco
+```
 
 ---
 
@@ -29,15 +69,17 @@ O backend recebe apenas o `itemId` e a `quantity`, busca o preço oficial no ban
 - Spring Web
 - Spring Data JPA
 - Hibernate
-- H2 Database
+- PostgreSQL
+- Docker
+- Docker Compose
 - Maven
-- Postman/Insomnia para testes
+- Postman ou Insomnia para testes
 
 ---
 
-## Modelo de domínio
+## Domínio da aplicação
 
-A modelagem principal segue a estrutura:
+A aplicação continua representando um fluxo simples de delivery com carrinho.
 
 ```text
 Person 1 --- 1 Cart
@@ -45,19 +87,11 @@ Cart   1 --- N CartItem
 CartItem N --- 1 Item
 ```
 
-### Entidades
+### Entidades principais
 
 #### `Person`
 
-Representa o cliente da aplicação.
-
-Responsabilidades:
-
-- Armazenar dados pessoais básicos.
-- Armazenar dados de endereço.
-- Possuir um único carrinho ativo.
-
-Exemplo conceitual:
+Representa a pessoa/cliente da aplicação.
 
 ```text
 Person
@@ -75,19 +109,9 @@ Person
 - cart
 ```
 
----
-
 #### `Item`
 
-Representa um produto disponível no catálogo.
-
-Responsabilidades:
-
-- Armazenar SKU.
-- Armazenar nome do produto.
-- Armazenar preço atual do produto.
-
-Exemplo conceitual:
+Representa um produto cadastrado no catálogo.
 
 ```text
 Item
@@ -97,22 +121,9 @@ Item
 - unitPrice
 ```
 
-Importante: `Item` não representa um produto dentro do carrinho.  
-Ele representa o produto cadastrado no catálogo.
-
----
-
 #### `Cart`
 
-Representa o carrinho de uma pessoa.
-
-Responsabilidades:
-
-- Pertencer a uma pessoa.
-- Agrupar vários `CartItem`.
-- Calcular o valor total do carrinho.
-
-Exemplo conceitual:
+Representa o carrinho vinculado a uma pessoa.
 
 ```text
 Cart
@@ -122,20 +133,9 @@ Cart
 - totalValue
 ```
 
----
-
 #### `CartItem`
 
 Representa uma linha dentro do carrinho.
-
-Responsabilidades:
-
-- Apontar para um produto do catálogo.
-- Armazenar a quantidade escolhida.
-- Armazenar o preço unitário usado no momento da inclusão.
-- Calcular o total daquela linha.
-
-Exemplo conceitual:
 
 ```text
 CartItem
@@ -146,41 +146,187 @@ CartItem
 - totalValue
 ```
 
-### Por que `CartItem` tem `unitValue`?
+---
 
-O `Item` possui o preço atual do produto, por exemplo:
+## Regra importante sobre preço
 
-```text
-Burger Artesanal = R$ 29,90
+O frontend não envia o preço do produto ao adicionar um item no carrinho.
+
+A requisição envia apenas:
+
+```json
+{
+  "itemId": 1,
+  "quantity": 2
+}
 ```
 
-Quando esse produto é adicionado ao carrinho, o backend copia esse preço para `CartItem.unitValue`.
+O backend faz o seguinte:
 
-Isso permite preservar o valor utilizado naquele momento. Se o preço do produto mudar depois, o item já adicionado ao carrinho não muda automaticamente.
+```text
+1. Busca o produto pelo itemId.
+2. Lê o preço oficial salvo no banco.
+3. Copia esse preço para CartItem.unitValue.
+4. Calcula o total da linha com quantity * unitValue.
+5. Recalcula o total do carrinho.
+```
+
+Isso evita que o cliente da API manipule o preço do produto na requisição.
 
 ---
 
-## Fluxo da regra de negócio
+## Estrutura esperada do módulo
 
-O fluxo recomendado é:
+Uma estrutura possível para este laboratório:
 
 ```text
-1. Criar produtos no catálogo.
-2. Criar uma pessoa.
-3. Criar um carrinho para essa pessoa.
-4. Adicionar produtos existentes ao carrinho.
-5. Consultar o carrinho.
-6. Remover um item do carrinho, se necessário.
-7. Consultar novamente o carrinho.
+03-database-separation
+├── src
+│   └── main
+│       ├── java
+│       └── resources
+│           └── application.yml
+├── docker-compose.yml
+├── pom.xml
+└── README.md
 ```
 
-A ordem entre criar `Person` e criar `Item` não importa no início, porque uma entidade ainda não depende da outra.
+---
 
-Porém, para adicionar produtos ao carrinho, é necessário que:
+## Configuração do PostgreSQL com Docker Compose
 
-- A pessoa já exista.
-- O produto já exista.
-- A pessoa tenha um carrinho ou o backend crie um automaticamente.
+Exemplo de `docker-compose.yml`:
+
+```yaml
+services:
+  postgres:
+    image: postgres:16
+    container_name: postgres-local
+    restart: unless-stopped
+
+    ports:
+      - "${POSTGRES_PORT}:5432"
+
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  postgres_data:
+```
+
+---
+
+## Variáveis de ambiente
+
+Crie um arquivo `.env` na raiz do módulo:
+
+```env
+POSTGRES_DB=delivery_db
+POSTGRES_USER=delivery_user
+POSTGRES_PASSWORD=delivery_pass
+POSTGRES_PORT=5432
+```
+
+> O arquivo `.env` facilita a configuração local e evita deixar credenciais fixas diretamente no `docker-compose.yml`.
+
+---
+
+## Configuração da aplicação
+
+Exemplo de `application.yml` usando PostgreSQL:
+
+```yaml
+spring:
+  application:
+    name: delivery-api
+
+  datasource:
+    url: jdbc:postgresql://localhost:${POSTGRES_PORT}/${POSTGRES_DB}
+    username: ${POSTGRES_USER}
+    password: ${POSTGRES_PASSWORD}
+
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
+
+server:
+  port: 8080
+```
+
+### Observação sobre `ddl-auto`
+
+Neste laboratório, `ddl-auto: create-drop` pode ser usado para estudo, porque recria as tabelas automaticamente ao subir a aplicação.
+
+Para um ambiente mais próximo de produção, o ideal seria evoluir para:
+
+```yaml
+spring:
+  jpa:
+    hibernate:
+      ddl-auto: validate
+```
+
+E controlar a evolução do schema com uma ferramenta como **Flyway** ou **Liquibase**.
+
+---
+
+## Como executar o projeto
+
+### 1. Subir o PostgreSQL
+
+Na pasta do módulo:
+
+```bash
+docker compose up -d
+```
+
+Verifique se o container subiu:
+
+```bash
+docker ps
+```
+
+Você deve ver algo parecido com:
+
+```text
+postgres-local   postgres:16   Up   0.0.0.0:5432->5432/tcp
+```
+
+---
+
+### 2. Rodar a aplicação Spring Boot
+
+Com o PostgreSQL rodando, execute:
+
+```bash
+mvn spring-boot:run
+```
+
+Ou, se preferir gerar o pacote:
+
+```bash
+mvn clean package
+java -jar target/*.jar
+```
+
+---
+
+### 3. Acessar a API
+
+Base URL:
+
+```text
+http://localhost:8080
+```
 
 ---
 
@@ -201,17 +347,9 @@ Porém, para adicionar produtos ao carrinho, é necessário que:
 
 ---
 
-## Como testar no Postman
+## Fluxo de teste no Postman
 
-Base URL:
-
-```text
-http://localhost:8080
-```
-
----
-
-# 1. Criar produto 1
+### 1. Criar produto
 
 ```http
 POST http://localhost:8080/api/v1/items
@@ -228,7 +366,7 @@ Content-Type: application/json
 
 ---
 
-# 2. Criar produto 2
+### 2. Criar outro produto
 
 ```http
 POST http://localhost:8080/api/v1/items
@@ -245,24 +383,7 @@ Content-Type: application/json
 
 ---
 
-# 3. Criar produto 3
-
-```http
-POST http://localhost:8080/api/v1/items
-Content-Type: application/json
-```
-
-```json
-{
-  "sku": "SODA-001",
-  "name": "Refrigerante Lata",
-  "unitPrice": 7.50
-}
-```
-
----
-
-# 4. Conferir produtos criados
+### 3. Listar produtos
 
 ```http
 GET http://localhost:8080/api/v1/items
@@ -283,19 +404,13 @@ Resposta esperada aproximada:
     "sku": "FRIES-001",
     "name": "Batata Frita",
     "unitPrice": 14.90
-  },
-  {
-    "id": 3,
-    "sku": "SODA-001",
-    "name": "Refrigerante Lata",
-    "unitPrice": 7.50
   }
 ]
 ```
 
 ---
 
-# 5. Criar pessoa
+### 4. Criar pessoa
 
 ```http
 POST http://localhost:8080/api/v1/persons
@@ -319,57 +434,18 @@ Content-Type: application/json
 
 ---
 
-# 6. Conferir pessoa criada
-
-```http
-GET http://localhost:8080/api/v1/persons
-```
-
-Resposta esperada aproximada:
-
-```json
-[
-  {
-    "id": 1,
-    "name": "Felipe Matheus",
-    "age": 25,
-    "document": "12345678909",
-    "zipCode": "01001-000",
-    "street": "Rua Exemplo",
-    "number": 100,
-    "complement": "Apartamento 202",
-    "neighborhood": "Centro",
-    "city": "São Paulo",
-    "state": "SP",
-    "cart": null
-  }
-]
-```
-
----
-
-# 7. Criar carrinho para a pessoa
+### 5. Criar carrinho para a pessoa
 
 ```http
 POST http://localhost:8080/api/v1/carts/persons/1
 Content-Type: application/json
 ```
 
-Não precisa enviar body.
-
-Regra executada:
-
-```text
-1. Busca a pessoa pelo personId.
-2. Verifica se ela já possui carrinho.
-3. Se não possuir, cria um novo carrinho.
-4. Associa o carrinho à pessoa.
-5. Salva a alteração.
-```
+Não é necessário enviar body.
 
 ---
 
-# 8. Adicionar Burger ao carrinho
+### 6. Adicionar produto ao carrinho
 
 ```http
 POST http://localhost:8080/api/v1/carts/persons/1/items
@@ -383,22 +459,9 @@ Content-Type: application/json
 }
 ```
 
-Regra executada:
-
-```text
-1. Busca a pessoa pelo personId.
-2. Busca o carrinho da pessoa.
-3. Busca o produto pelo itemId.
-4. Cria um CartItem.
-5. Define quantity = 2.
-6. Copia Item.unitPrice para CartItem.unitValue.
-7. Adiciona o CartItem ao Cart.
-8. Salva o carrinho atualizado.
-```
-
 ---
 
-# 9. Adicionar Batata ao carrinho
+### 7. Adicionar outro produto ao carrinho
 
 ```http
 POST http://localhost:8080/api/v1/carts/persons/1/items
@@ -414,23 +477,7 @@ Content-Type: application/json
 
 ---
 
-# 10. Adicionar Refrigerante ao carrinho
-
-```http
-POST http://localhost:8080/api/v1/carts/persons/1/items
-Content-Type: application/json
-```
-
-```json
-{
-  "itemId": 3,
-  "quantity": 2
-}
-```
-
----
-
-# 11. Consultar carrinho da pessoa
+### 8. Consultar carrinho
 
 ```http
 GET http://localhost:8080/api/v1/carts/persons/1
@@ -465,168 +512,193 @@ Resposta esperada aproximada:
         "unitPrice": 14.90
       },
       "totalValue": 14.90
-    },
-    {
-      "id": 3,
-      "quantity": 2,
-      "unitValue": 7.50,
-      "item": {
-        "id": 3,
-        "sku": "SODA-001",
-        "name": "Refrigerante Lata",
-        "unitPrice": 7.50
-      },
-      "totalValue": 15.00
     }
   ],
-  "totalValue": 89.70
+  "totalValue": 74.70
 }
 ```
 
 ---
 
-# 12. Remover um item do carrinho
+### 9. Remover item do carrinho
 
-Para remover um item, use o `id` do `CartItem`, não o `itemId`.
-
-Exemplo: no retorno acima, a Batata Frita está no `CartItem` de ID `2`.
+Use o `id` do `CartItem`, não o `itemId` do produto.
 
 ```http
 DELETE http://localhost:8080/api/v1/carts/persons/1/items/2
 ```
 
-Não precisa enviar body.
-
 ---
 
-# 13. Consultar novamente o carrinho
+### 10. Consultar carrinho novamente
 
 ```http
 GET http://localhost:8080/api/v1/carts/persons/1
 ```
 
-Agora o carrinho deve retornar sem a Batata Frita.
-
-Resposta esperada aproximada:
-
-```json
-{
-  "id": 1,
-  "items": [
-    {
-      "id": 1,
-      "quantity": 2,
-      "unitValue": 29.90,
-      "item": {
-        "id": 1,
-        "sku": "BURGER-001",
-        "name": "Burger Artesanal",
-        "unitPrice": 29.90
-      },
-      "totalValue": 59.80
-    },
-    {
-      "id": 3,
-      "quantity": 2,
-      "unitValue": 7.50,
-      "item": {
-        "id": 3,
-        "sku": "SODA-001",
-        "name": "Refrigerante Lata",
-        "unitPrice": 7.50
-      },
-      "totalValue": 15.00
-    }
-  ],
-  "totalValue": 74.80
-}
-```
+Agora o carrinho deve retornar sem o item removido.
 
 ---
 
 ## Ordem resumida de testes
 
 ```text
-1.  POST   /api/v1/items
-2.  POST   /api/v1/items
-3.  POST   /api/v1/items
-4.  GET    /api/v1/items
+1. POST   /api/v1/items
+2. POST   /api/v1/items
+3. GET    /api/v1/items
 
-5.  POST   /api/v1/persons
-6.  GET    /api/v1/persons
+4. POST   /api/v1/persons
+5. GET    /api/v1/persons
 
-7.  POST   /api/v1/carts/persons/1
-
-8.  POST   /api/v1/carts/persons/1/items
-9.  POST   /api/v1/carts/persons/1/items
-10. POST   /api/v1/carts/persons/1/items
-
+6. POST   /api/v1/carts/persons/1
+7. POST   /api/v1/carts/persons/1/items
+8. POST   /api/v1/carts/persons/1/items
+9. GET    /api/v1/carts/persons/1
+10. DELETE /api/v1/carts/persons/1/items/2
 11. GET    /api/v1/carts/persons/1
-
-12. DELETE /api/v1/carts/persons/1/items/2
-
-13. GET    /api/v1/carts/persons/1
 ```
 
 ---
 
-## Exemplo de fluxo em alto nível
+## Como verificar os dados no PostgreSQL
 
-```mermaid
-flowchart TD
-    A[Create Item/Product] --> B[Create Person]
-    B --> C[Create Cart for Person]
-    C --> D[Add Item to Cart]
-    D --> E[Backend fetches Item price from database]
-    E --> F[Create CartItem with quantity and unitValue]
-    F --> G[Return updated Cart]
-    G --> H[Get Cart by Person ID]
-    H --> I[Remove CartItem if needed]
-    I --> J[Get updated Cart]
+Você pode entrar no container:
+
+```bash
+docker exec -it postgres-local psql -U delivery_user -d delivery_db
+```
+
+Listar tabelas:
+
+```sql
+\dt
+```
+
+Consultar produtos:
+
+```sql
+SELECT * FROM item;
+```
+
+Consultar pessoas:
+
+```sql
+SELECT * FROM person;
+```
+
+Consultar carrinhos:
+
+```sql
+SELECT * FROM cart;
+```
+
+Consultar itens do carrinho:
+
+```sql
+SELECT * FROM cart_item;
+```
+
+Sair do `psql`:
+
+```sql
+\q
 ```
 
 ---
 
-## Regras de negócio principais
+## Comandos úteis do Docker
 
-- Uma `Person` pode ter no máximo um `Cart` ativo.
-- Um `Cart` pode ter vários `CartItem`.
-- Um `CartItem` aponta para um `Item` existente.
-- O frontend não informa preço ao adicionar produto ao carrinho.
-- O backend busca o preço real do produto no banco.
-- O `CartItem.unitValue` guarda o preço usado no momento da inclusão.
-- O total de cada item é calculado por `quantity * unitValue`.
-- O total do carrinho é a soma dos totais de todos os `CartItem`.
+Subir o banco:
+
+```bash
+docker compose up -d
+```
+
+Ver logs do PostgreSQL:
+
+```bash
+docker logs -f postgres-local
+```
+
+Parar o banco:
+
+```bash
+docker compose stop
+```
+
+Parar e remover container, mantendo volume:
+
+```bash
+docker compose down
+```
+
+Parar e remover container junto com os dados persistidos:
+
+```bash
+docker compose down -v
+```
+
+> Use `docker compose down -v` apenas quando quiser apagar o banco local e começar do zero.
+
+---
+
+## Principais aprendizados deste módulo
+
+- Separar aplicação e banco é um passo importante rumo a uma arquitetura mais realista.
+- H2 é excelente para protótipos, mas PostgreSQL representa melhor um cenário próximo de produção.
+- Docker Compose facilita subir dependências locais sem instalar tudo diretamente na máquina.
+- Volumes Docker permitem persistir os dados mesmo após parar o container.
+- A aplicação Spring Boot passa a depender da disponibilidade do PostgreSQL para iniciar corretamente.
+- Configurações por variável de ambiente deixam o projeto mais flexível e menos acoplado à máquina local.
 
 ---
 
 ## Próximos passos possíveis
 
-Este módulo pode evoluir para cenários mais avançados, como:
+Este módulo pode evoluir para:
 
-- Criar DTOs de response para não retornar entidades JPA diretamente.
-- Criar tratamento global de exceções com `@ControllerAdvice`.
+- Dockerizar também a aplicação Spring Boot.
+- Criar um `docker-compose.yml` com API + PostgreSQL.
+- Adicionar Flyway ou Liquibase para versionamento do banco.
+- Criar DTOs para evitar retorno direto de entidades JPA.
 - Adicionar validações com Bean Validation.
-- Criar entidade `Order` para transformar carrinho em pedido.
-- Adicionar entidade `Payment`.
-- Adicionar autenticação.
-- Trocar H2 por PostgreSQL.
-- Dockerizar a aplicação.
-- Separar aplicação e banco em containers diferentes.
-- Evoluir para arquitetura com Load Balancer, Cache e Message Queue.
-- Migrar o laboratório para AWS como parte da trilha de System Design.
+- Criar tratamento global de erros com `@RestControllerAdvice`.
+- Separar leitura e escrita em cenários futuros.
+- Adicionar Redis como cache.
+- Adicionar mensageria com RabbitMQ ou Kafka.
+- Evoluir para implantação em AWS usando EC2, RDS, Security Groups e subnets.
 
 ---
 
-## Observação
+## Relação com System Design
 
-Este projeto ainda é um laboratório inicial. O foco principal aqui é entender bem:
+Este laboratório representa a transição de uma aplicação simples para uma arquitetura com componentes separados.
 
 ```text
-Produto não é item de carrinho.
-Carrinho não é produto.
-Pessoa não tem produto diretamente.
-Pessoa tem carrinho.
-Carrinho tem linhas.
-Cada linha aponta para um produto.
+Módulo 01: aplicação simples local
+Módulo 02: load balancer local com Nginx
+Módulo 03: separação entre aplicação e banco de dados
+```
+
+A partir daqui, fica mais fácil evoluir para cenários como:
+
+```text
+API em uma instância/container
+Banco em outra instância/container
+Rede controlada entre aplicação e banco
+Persistência independente do ciclo de vida da aplicação
+Migração futura para banco gerenciado, como Amazon RDS
+```
+
+---
+
+## Observação final
+
+Este projeto continua sendo um laboratório didático. A principal evolução deste módulo é trocar o banco embarcado por um banco externo, mantendo a regra de negócio simples para que o foco fique claro:
+
+```text
+Separar responsabilidades de infraestrutura.
+A aplicação executa a regra de negócio.
+O PostgreSQL persiste os dados.
+O Docker Compose orquestra a dependência local.
 ```
