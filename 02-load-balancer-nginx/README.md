@@ -1,22 +1,62 @@
-# 03 — Database Separation
+# 02 — Load Balancer com Nginx
 
-> Laboratório de System Design para separar a aplicação do banco de dados, substituindo o H2 em memória por um PostgreSQL executando em container via Docker Compose.
+> Laboratório de System Design para praticar **load balancing**, **reverse proxy**, **Docker Compose** e isolamento de serviços em rede privada.
 
-Este módulo faz parte do repositório **system-design-lab** e representa a evolução natural do laboratório anterior de aplicação monolítica local. A regra de negócio principal continua sendo o fluxo de carrinho de uma API de delivery, mas agora a persistência deixa de ser feita em banco embarcado/in-memory e passa a usar um banco relacional externo.
+Este módulo faz parte do repositório [`system-design-lab`](../README.md) e representa uma evolução arquitetural importante: em vez de expor a aplicação Spring Boot diretamente, agora existe um **Nginx na frente da aplicação**, atuando como **ponto único de entrada** e distribuindo as requisições entre duas instâncias da mesma API.
 
 ---
 
 ## Objetivo do módulo
 
-O foco deste laboratório não é adicionar novas regras de negócio complexas. O objetivo principal é praticar um passo essencial em System Design:
+O objetivo deste laboratório é entender, na prática, como funciona uma arquitetura com **load balancer**:
 
 ```text
-Aplicação Spring Boot  --->  PostgreSQL externo
+Usuário -> Nginx -> App 1 / App 2 -> PostgreSQL
 ```
 
-Antes, a aplicação usava **H2 Database**, um banco em memória útil para testes rápidos e protótipos. Neste módulo, o H2 foi removido e substituído por um **PostgreSQL isolado em container**, criado com Docker Compose.
+Neste cenário:
 
-Com isso, o projeto começa a se aproximar de uma arquitetura mais realista, onde aplicação e banco são componentes separados.
+- o usuário acessa apenas o **Nginx**;
+- o Nginx recebe as requisições HTTP;
+- o Nginx distribui as requisições entre duas instâncias da aplicação Spring Boot;
+- as aplicações acessam um PostgreSQL em container;
+- as aplicações e o banco ficam em uma rede Docker interna;
+- somente o Nginx possui porta publicada para fora do Docker Compose.
+
+A ideia é simular localmente um conceito muito comum em arquiteturas reais, como:
+
+```text
+AWS Application Load Balancer -> EC2 1 / EC2 2 -> RDS
+```
+
+---
+
+## Arquitetura
+
+![Arquitetura do laboratório](./arquitetura.png)
+
+### Visão conceitual
+
+```mermaid
+flowchart LR
+    U[User / Postman / Browser]
+
+    subgraph Docker[Docker Compose]
+        N[Nginx Load Balancer<br/>porta publicada: 8080<br/>porta interna: 80]
+
+        subgraph PrivateNetwork[Rede Docker Privada]
+            A1[App 1<br/>Spring Boot :8080]
+            A2[App 2<br/>Spring Boot :8080]
+            DB[(PostgreSQL :5432)]
+        end
+    end
+
+    U -->|HTTP localhost:8080| N
+    N -->|proxy_pass app1:8080| A1
+    N -->|proxy_pass app2:8080| A2
+    A1 -->|JDBC postgres:5432| DB
+    A2 -->|JDBC postgres:5432| DB
+```
 
 ---
 
@@ -24,47 +64,17 @@ Com isso, o projeto começa a se aproximar de uma arquitetura mais realista, ond
 
 | Antes | Agora |
 |---|---|
-| Banco H2 em memória | PostgreSQL em container |
-| Dados voláteis ao reiniciar a aplicação | Dados persistidos em volume Docker |
-| Banco acoplado ao runtime da aplicação | Banco separado da aplicação |
-| Configuração mais simples para protótipo | Configuração mais próxima de ambiente real |
-| Menor fidelidade com produção | Melhor base para evoluir para cloud |
-
----
-
-## Arquitetura do laboratório
-
-```mermaid
-flowchart LR
-    Client[Postman / Insomnia] --> API[Spring Boot API]
-    API --> JPA[Spring Data JPA / Hibernate]
-    JPA --> DB[(PostgreSQL Container)]
-    DB --> Volume[(Docker Volume)]
-```
-
-### Visão conceitual
-
-```text
-Usuário testa a API no Postman
-        ↓
-Spring Boot recebe a requisição
-        ↓
-Controller chama o fluxo de aplicação
-        ↓
-Repository usa Spring Data JPA
-        ↓
-Hibernate gera SQL
-        ↓
-PostgreSQL persiste os dados
-        ↓
-Volume Docker mantém os dados do banco
-```
+| Uma aplicação acessada diretamente | Duas instâncias da aplicação atrás do Nginx |
+| Cliente chamava a API diretamente | Cliente chama apenas o load balancer |
+| Aplicação exposta para o host | Aplicações privadas dentro da rede Docker |
+| PostgreSQL podia ser exposto localmente | PostgreSQL fica privado no Docker Compose |
+| Foco em persistência separada | Foco em distribuição de carga e entrada única |
 
 ---
 
 ## Tecnologias utilizadas
 
-- Java
+- Java 21
 - Spring Boot
 - Spring Web
 - Spring Data JPA
@@ -72,173 +82,287 @@ Volume Docker mantém os dados do banco
 - PostgreSQL
 - Docker
 - Docker Compose
+- Nginx
 - Maven
-- Postman ou Insomnia para testes
+- Postman, Insomnia ou navegador para testes
 
 ---
 
-## Domínio da aplicação
+## Componentes da arquitetura
 
-A aplicação continua representando um fluxo simples de delivery com carrinho.
+### Nginx
 
-```text
-Person 1 --- 1 Cart
-Cart   1 --- N CartItem
-CartItem N --- 1 Item
+O Nginx atua como **load balancer** e **reverse proxy**.
+
+Ele é o único serviço com porta publicada para o host:
+
+```yaml
+ports:
+  - "8080:80"
 ```
 
-### Entidades principais
-
-#### `Person`
-
-Representa a pessoa/cliente da aplicação.
+Isso significa:
 
 ```text
-Person
-- id
-- name
-- age
-- document
-- zipCode
-- street
-- number
-- complement
-- neighborhood
-- city
-- state
-- cart
+localhost:8080 -> container nginx na porta 80
 ```
 
-#### `Item`
+A partir daí, o Nginx encaminha as requisições para uma das aplicações disponíveis no grupo `delivery_apps`.
 
-Representa um produto cadastrado no catálogo.
+---
 
-```text
-Item
-- id
-- sku
-- name
-- unitPrice
+### App 1 e App 2
+
+`app1` e `app2` são duas instâncias da mesma aplicação Spring Boot.
+
+Ambas usam a mesma imagem Docker:
+
+```yaml
+image: delivery-api:latest
 ```
 
-#### `Cart`
+Cada uma roda internamente na porta `8080`, mas nenhuma delas publica porta para o host.
 
-Representa o carrinho vinculado a uma pessoa.
+Ou seja, do seu Windows você **não acessa** diretamente:
 
 ```text
-Cart
-- id
-- person
-- items
-- totalValue
+localhost:8081
+localhost:8082
 ```
 
-#### `CartItem`
-
-Representa uma linha dentro do carrinho.
+Você acessa somente:
 
 ```text
-CartItem
-- id
-- item
-- quantity
-- unitValue
-- totalValue
+localhost:8080
+```
+
+E quem decide se a requisição vai para `app1` ou `app2` é o Nginx.
+
+---
+
+### PostgreSQL
+
+O PostgreSQL roda em container e também fica privado na rede Docker.
+
+As aplicações acessam o banco usando o nome do serviço no Docker Compose:
+
+```text
+postgres:5432
+```
+
+Não se usa `localhost` dentro de container para acessar outro container.
+
+Dentro do Docker Compose, o host correto do banco é:
+
+```text
+postgres
 ```
 
 ---
 
-## Regra importante sobre preço
+## Configuração do Nginx
 
-O frontend não envia o preço do produto ao adicionar um item no carrinho.
+Arquivo:
 
-A requisição envia apenas:
+```text
+nginx/nginx.conf
+```
 
-```json
-{
-  "itemId": 1,
-  "quantity": 2
+Exemplo da configuração principal:
+
+```nginx
+worker_processes 1;
+
+events {
+    worker_connections 1024;
+}
+
+http {
+    upstream delivery_apps {
+        server app1:8080;
+        server app2:8080;
+    }
+
+    server {
+        listen 80;
+
+        location / {
+            proxy_pass http://delivery_apps;
+
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+        }
+    }
 }
 ```
 
-O backend faz o seguinte:
+### Explicando a configuração
 
-```text
-1. Busca o produto pelo itemId.
-2. Lê o preço oficial salvo no banco.
-3. Copia esse preço para CartItem.unitValue.
-4. Calcula o total da linha com quantity * unitValue.
-5. Recalcula o total do carrinho.
+```nginx
+upstream delivery_apps {
+    server app1:8080;
+    server app2:8080;
+}
 ```
 
-Isso evita que o cliente da API manipule o preço do produto na requisição.
+Define um grupo de backends chamado `delivery_apps`.
+
+Esse grupo contém duas instâncias da aplicação:
+
+```text
+app1:8080
+app2:8080
+```
+
+No Docker Compose, `app1` e `app2` são nomes de serviços, e o Docker resolve esses nomes dentro da rede interna.
+
+```nginx
+server {
+    listen 80;
+}
+```
+
+Faz o Nginx escutar requisições HTTP na porta `80` dentro do container.
+
+```nginx
+location / {
+    proxy_pass http://delivery_apps;
+}
+```
+
+Encaminha toda requisição recebida para uma das instâncias do grupo `delivery_apps`.
 
 ---
 
-## Estrutura esperada do módulo
+## Docker Compose
 
-Uma estrutura possível para este laboratório:
+Arquivo:
 
 ```text
-03-database-separation
-├── src
-│   └── main
-│       ├── java
-│       └── resources
-│           └── application.yml
-├── docker-compose.yml
-├── pom.xml
-└── README.md
+docker-compose.yml
 ```
 
----
-
-## Configuração do PostgreSQL com Docker Compose
-
-Exemplo de `docker-compose.yml`:
+Estrutura principal:
 
 ```yaml
 services:
+  nginx:
+    image: nginx:latest
+    container_name: nginx-lb
+    ports:
+      - "8080:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - app1
+      - app2
+    networks:
+      - app-network
+
+  app1:
+    image: delivery-api:latest
+    container_name: delivery-app-1
+    environment:
+      SERVER_PORT: 8080
+      DB_HOST: postgres
+      DB_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    depends_on:
+      - postgres
+    networks:
+      - app-network
+
+  app2:
+    image: delivery-api:latest
+    container_name: delivery-app-2
+    environment:
+      SERVER_PORT: 8080
+      DB_HOST: postgres
+      DB_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    depends_on:
+      - postgres
+    networks:
+      - app-network
+
   postgres:
     image: postgres:16
     container_name: postgres-local
     restart: unless-stopped
-
-    ports:
-      - "${POSTGRES_PORT}:5432"
-
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    networks:
+      - app-network
 
 volumes:
   postgres_data:
+
+networks:
+  app-network:
+    driver: bridge
 ```
+
+---
+
+## Por que apenas o Nginx tem `ports`?
+
+No Compose, somente o Nginx publica porta para o host:
+
+```yaml
+ports:
+  - "8080:80"
+```
+
+Isso torna o Nginx a única porta de entrada da aplicação.
+
+As aplicações e o banco ficam sem `ports`, portanto permanecem acessíveis apenas dentro da rede Docker:
+
+```text
+nginx -> app1:8080
+nginx -> app2:8080
+app1/app2 -> postgres:5432
+```
+
+Esse desenho aproxima o laboratório de uma arquitetura real, onde os serviços internos não deveriam ser expostos diretamente para o usuário final.
 
 ---
 
 ## Variáveis de ambiente
 
-Crie um arquivo `.env` na raiz do módulo:
+Arquivo:
+
+```text
+.env
+```
+
+Exemplo:
 
 ```env
-POSTGRES_DB=delivery_db
-POSTGRES_USER=delivery_user
-POSTGRES_PASSWORD=delivery_pass
+POSTGRES_DB=app_db
+POSTGRES_USER=app_user
+POSTGRES_PASSWORD=app_password
 POSTGRES_PORT=5432
 ```
 
-> O arquivo `.env` facilita a configuração local e evita deixar credenciais fixas diretamente no `docker-compose.yml`.
+> Observação: neste laboratório, o `POSTGRES_PORT` pode existir no `.env`, mas o banco não precisa publicar porta para o host se a intenção for manter o PostgreSQL privado dentro da rede Docker.
 
 ---
 
-## Configuração da aplicação
+## Configuração da aplicação Spring Boot
 
-Exemplo de `application.yml` usando PostgreSQL:
+Para a aplicação funcionar tanto localmente quanto em container, a URL do banco deve ser parametrizada por variáveis de ambiente.
+
+Exemplo:
 
 ```yaml
 spring:
@@ -246,9 +370,10 @@ spring:
     name: delivery-api
 
   datasource:
-    url: jdbc:postgresql://localhost:${POSTGRES_PORT}/${POSTGRES_DB}
-    username: ${POSTGRES_USER}
-    password: ${POSTGRES_PASSWORD}
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${POSTGRES_DB:app_db}
+    username: ${POSTGRES_USER:app_user}
+    password: ${POSTGRES_PASSWORD:app_password}
+    driver-class-name: org.postgresql.Driver
 
   jpa:
     hibernate:
@@ -259,74 +384,157 @@ spring:
         format_sql: true
 
 server:
-  port: 8080
+  port: ${SERVER_PORT:8080}
 ```
 
-### Observação sobre `ddl-auto`
+### Por que não usar `localhost` no Docker?
 
-Neste laboratório, `ddl-auto: create-drop` pode ser usado para estudo, porque recria as tabelas automaticamente ao subir a aplicação.
+Dentro de um container, `localhost` aponta para o próprio container.
 
-Para um ambiente mais próximo de produção, o ideal seria evoluir para:
+Portanto, se a aplicação tentar conectar em:
 
-```yaml
-spring:
-  jpa:
-    hibernate:
-      ddl-auto: validate
+```text
+localhost:5432
 ```
 
-E controlar a evolução do schema com uma ferramenta como **Flyway** ou **Liquibase**.
+ela procurará um PostgreSQL dentro do container da própria aplicação.
+
+Como o PostgreSQL está em outro container, o correto é usar o nome do serviço:
+
+```text
+postgres:5432
+```
+
+---
+
+## Dockerfile
+
+Arquivo:
+
+```text
+Dockerfile
+```
+
+Exemplo utilizado para empacotar a aplicação Spring Boot:
+
+```dockerfile
+FROM eclipse-temurin:21-jre-alpine
+
+WORKDIR /app
+
+COPY target/*.jar app.jar
+
+EXPOSE 8080
+
+ENTRYPOINT ["java", "-jar", "app.jar"]
+```
 
 ---
 
 ## Como executar o projeto
 
-### 1. Subir o PostgreSQL
+### 1. Gerar o `.jar`
 
-Na pasta do módulo:
+Na raiz do módulo:
+
+```bash
+mvn clean package -DskipTests
+```
+
+Ou, se quiser executar os testes:
+
+```bash
+mvn clean package
+```
+
+---
+
+### 2. Criar a imagem Docker da aplicação
+
+```bash
+docker build -t delivery-api:latest .
+```
+
+Esse comando cria uma imagem local chamada:
+
+```text
+delivery-api:latest
+```
+
+Essa imagem será usada por `app1` e `app2` no Docker Compose.
+
+---
+
+### 3. Subir a arquitetura completa
 
 ```bash
 docker compose up -d
 ```
 
-Verifique se o container subiu:
+---
+
+### 4. Verificar os containers
 
 ```bash
-docker ps
+docker compose ps
 ```
 
-Você deve ver algo parecido com:
+Resultado esperado:
 
 ```text
-postgres-local   postgres:16   Up   0.0.0.0:5432->5432/tcp
+nginx-lb         Up
+postgres-local   Up
+delivery-app-1   Up
+delivery-app-2   Up
 ```
 
 ---
 
-### 2. Rodar a aplicação Spring Boot
-
-Com o PostgreSQL rodando, execute:
-
-```bash
-mvn spring-boot:run
-```
-
-Ou, se preferir gerar o pacote:
-
-```bash
-mvn clean package
-java -jar target/*.jar
-```
-
----
-
-### 3. Acessar a API
+### 5. Acessar a API
 
 Base URL:
 
 ```text
 http://localhost:8080
 ```
+
+Todas as chamadas devem ser feitas pelo Nginx.
+
+Exemplo:
+
+```text
+http://localhost:8080/api/v1/items
+```
+
+---
+
+## Como validar o balanceamento
+
+A forma mais simples de visualizar o balanceamento é criar um endpoint que retorne o hostname do container.
+
+Exemplo:
+
+```java
+@RestController
+public class InstanceController {
+
+    @Value("${HOSTNAME:unknown}")
+    private String hostname;
+
+    @GetMapping("/whoami")
+    public String whoami() {
+        return "Resposta da instância: " + hostname;
+    }
+}
+```
+
+Depois acesse várias vezes:
+
+```text
+http://localhost:8080/whoami
+```
+
+A resposta tende a alternar entre os containers, mostrando que o Nginx está distribuindo as requisições entre `app1` e `app2`.
 
 ---
 
@@ -366,51 +574,7 @@ Content-Type: application/json
 
 ---
 
-### 2. Criar outro produto
-
-```http
-POST http://localhost:8080/api/v1/items
-Content-Type: application/json
-```
-
-```json
-{
-  "sku": "FRIES-001",
-  "name": "Batata Frita",
-  "unitPrice": 14.90
-}
-```
-
----
-
-### 3. Listar produtos
-
-```http
-GET http://localhost:8080/api/v1/items
-```
-
-Resposta esperada aproximada:
-
-```json
-[
-  {
-    "id": 1,
-    "sku": "BURGER-001",
-    "name": "Burger Artesanal",
-    "unitPrice": 29.90
-  },
-  {
-    "id": 2,
-    "sku": "FRIES-001",
-    "name": "Batata Frita",
-    "unitPrice": 14.90
-  }
-]
-```
-
----
-
-### 4. Criar pessoa
+### 2. Criar pessoa
 
 ```http
 POST http://localhost:8080/api/v1/persons
@@ -419,33 +583,30 @@ Content-Type: application/json
 
 ```json
 {
-  "name": "Felipe Matheus",
+  "name": "Felipe",
   "age": 25,
-  "document": "12345678909",
-  "zipCode": "01001-000",
+  "document": "12345678900",
+  "zipCode": "20000000",
   "street": "Rua Exemplo",
-  "number": 100,
-  "complement": "Apartamento 202",
+  "number": "100",
+  "complement": "Apto 101",
   "neighborhood": "Centro",
-  "city": "São Paulo",
-  "state": "SP"
+  "city": "Rio de Janeiro",
+  "state": "RJ"
 }
 ```
 
 ---
 
-### 5. Criar carrinho para a pessoa
+### 3. Criar carrinho para a pessoa
 
 ```http
 POST http://localhost:8080/api/v1/carts/persons/1
-Content-Type: application/json
 ```
-
-Não é necessário enviar body.
 
 ---
 
-### 6. Adicionar produto ao carrinho
+### 4. Adicionar item ao carrinho
 
 ```http
 POST http://localhost:8080/api/v1/carts/persons/1/items
@@ -461,244 +622,146 @@ Content-Type: application/json
 
 ---
 
-### 7. Adicionar outro produto ao carrinho
-
-```http
-POST http://localhost:8080/api/v1/carts/persons/1/items
-Content-Type: application/json
-```
-
-```json
-{
-  "itemId": 2,
-  "quantity": 1
-}
-```
-
----
-
-### 8. Consultar carrinho
+### 5. Consultar carrinho
 
 ```http
 GET http://localhost:8080/api/v1/carts/persons/1
 ```
 
-Resposta esperada aproximada:
-
-```json
-{
-  "id": 1,
-  "items": [
-    {
-      "id": 1,
-      "quantity": 2,
-      "unitValue": 29.90,
-      "item": {
-        "id": 1,
-        "sku": "BURGER-001",
-        "name": "Burger Artesanal",
-        "unitPrice": 29.90
-      },
-      "totalValue": 59.80
-    },
-    {
-      "id": 2,
-      "quantity": 1,
-      "unitValue": 14.90,
-      "item": {
-        "id": 2,
-        "sku": "FRIES-001",
-        "name": "Batata Frita",
-        "unitPrice": 14.90
-      },
-      "totalValue": 14.90
-    }
-  ],
-  "totalValue": 74.70
-}
-```
-
 ---
 
-### 9. Remover item do carrinho
+## Comandos úteis
 
-Use o `id` do `CartItem`, não o `itemId` do produto.
-
-```http
-DELETE http://localhost:8080/api/v1/carts/persons/1/items/2
-```
-
----
-
-### 10. Consultar carrinho novamente
-
-```http
-GET http://localhost:8080/api/v1/carts/persons/1
-```
-
-Agora o carrinho deve retornar sem o item removido.
-
----
-
-## Ordem resumida de testes
-
-```text
-1. POST   /api/v1/items
-2. POST   /api/v1/items
-3. GET    /api/v1/items
-
-4. POST   /api/v1/persons
-5. GET    /api/v1/persons
-
-6. POST   /api/v1/carts/persons/1
-7. POST   /api/v1/carts/persons/1/items
-8. POST   /api/v1/carts/persons/1/items
-9. GET    /api/v1/carts/persons/1
-10. DELETE /api/v1/carts/persons/1/items/2
-11. GET    /api/v1/carts/persons/1
-```
-
----
-
-## Como verificar os dados no PostgreSQL
-
-Você pode entrar no container:
+### Ver logs de todos os serviços
 
 ```bash
-docker exec -it postgres-local psql -U delivery_user -d delivery_db
+docker compose logs -f
 ```
 
-Listar tabelas:
-
-```sql
-\dt
-```
-
-Consultar produtos:
-
-```sql
-SELECT * FROM item;
-```
-
-Consultar pessoas:
-
-```sql
-SELECT * FROM person;
-```
-
-Consultar carrinhos:
-
-```sql
-SELECT * FROM cart;
-```
-
-Consultar itens do carrinho:
-
-```sql
-SELECT * FROM cart_item;
-```
-
-Sair do `psql`:
-
-```sql
-\q
-```
-
----
-
-## Comandos úteis do Docker
-
-Subir o banco:
+### Ver logs do Nginx
 
 ```bash
-docker compose up -d
+docker compose logs -f nginx
 ```
 
-Ver logs do PostgreSQL:
+### Ver logs da primeira aplicação
 
 ```bash
-docker logs -f postgres-local
+docker compose logs -f app1
 ```
 
-Parar o banco:
+### Ver logs da segunda aplicação
 
 ```bash
-docker compose stop
+docker compose logs -f app2
 ```
 
-Parar e remover container, mantendo volume:
+### Ver logs do PostgreSQL
+
+```bash
+docker compose logs -f postgres
+```
+
+### Derrubar os containers
 
 ```bash
 docker compose down
 ```
 
-Parar e remover container junto com os dados persistidos:
+### Derrubar os containers e remover volume do banco
 
 ```bash
 docker compose down -v
 ```
 
-> Use `docker compose down -v` apenas quando quiser apagar o banco local e começar do zero.
+Use `-v` apenas se quiser apagar também os dados persistidos no volume do PostgreSQL.
 
 ---
 
-## Principais aprendizados deste módulo
+## Problemas comuns
 
-- Separar aplicação e banco é um passo importante rumo a uma arquitetura mais realista.
-- H2 é excelente para protótipos, mas PostgreSQL representa melhor um cenário próximo de produção.
-- Docker Compose facilita subir dependências locais sem instalar tudo diretamente na máquina.
-- Volumes Docker permitem persistir os dados mesmo após parar o container.
-- A aplicação Spring Boot passa a depender da disponibilidade do PostgreSQL para iniciar corretamente.
-- Configurações por variável de ambiente deixam o projeto mais flexível e menos acoplado à máquina local.
+### `Connection to localhost:5432 refused`
 
----
+Esse erro acontece quando a aplicação em container tenta acessar o banco usando `localhost`.
 
-## Próximos passos possíveis
-
-Este módulo pode evoluir para:
-
-- Dockerizar também a aplicação Spring Boot.
-- Criar um `docker-compose.yml` com API + PostgreSQL.
-- Adicionar Flyway ou Liquibase para versionamento do banco.
-- Criar DTOs para evitar retorno direto de entidades JPA.
-- Adicionar validações com Bean Validation.
-- Criar tratamento global de erros com `@RestControllerAdvice`.
-- Separar leitura e escrita em cenários futuros.
-- Adicionar Redis como cache.
-- Adicionar mensageria com RabbitMQ ou Kafka.
-- Evoluir para implantação em AWS usando EC2, RDS, Security Groups e subnets.
-
----
-
-## Relação com System Design
-
-Este laboratório representa a transição de uma aplicação simples para uma arquitetura com componentes separados.
+Dentro do Docker Compose, a aplicação deve acessar o banco pelo nome do serviço:
 
 ```text
-Módulo 01: aplicação simples local
-Módulo 02: load balancer local com Nginx
-Módulo 03: separação entre aplicação e banco de dados
+postgres:5432
 ```
 
-A partir daqui, fica mais fácil evoluir para cenários como:
+A URL correta deve ficar parecida com:
 
 ```text
-API em uma instância/container
-Banco em outra instância/container
-Rede controlada entre aplicação e banco
-Persistência independente do ciclo de vida da aplicação
-Migração futura para banco gerenciado, como Amazon RDS
+jdbc:postgresql://postgres:5432/app_db
 ```
 
 ---
 
-## Observação final
+### `502 Bad Gateway` no Nginx
 
-Este projeto continua sendo um laboratório didático. A principal evolução deste módulo é trocar o banco embarcado por um banco externo, mantendo a regra de negócio simples para que o foco fique claro:
+Esse erro geralmente significa que o Nginx subiu, mas não conseguiu alcançar as aplicações.
+
+Verifique:
+
+```bash
+docker compose ps
+```
+
+E depois:
+
+```bash
+docker compose logs app1
+docker compose logs app2
+```
+
+---
+
+### Alterei o código, mas o container continua igual
+
+É necessário gerar o `.jar` novamente e rebuildar a imagem:
+
+```bash
+mvn clean package -DskipTests
+docker build -t delivery-api:latest .
+docker compose up -d
+```
+
+---
+
+## Conceitos praticados
+
+- Load Balancer
+- Reverse Proxy
+- Round-robin básico com Nginx
+- Rede privada no Docker Compose
+- Múltiplas instâncias da mesma aplicação
+- Banco de dados isolado em container
+- Comunicação entre containers por nome de serviço
+- Separação entre serviços públicos e privados
+- Base conceitual para AWS ALB, Target Groups, EC2 privadas e RDS privado
+
+---
+
+## Próximos passos sugeridos
+
+- Adicionar endpoint `/whoami` para visualizar a instância que respondeu.
+- Adicionar healthcheck nas aplicações e no PostgreSQL.
+- Configurar o Nginx para considerar apenas backends saudáveis.
+- Evoluir para múltiplas instâncias com escala via Docker Compose.
+- Reproduzir a mesma arquitetura na AWS usando Application Load Balancer, EC2 e RDS.
+- Evoluir a persistência com Flyway ou Liquibase em vez de `ddl-auto: create-drop`.
+
+---
+
+## Resultado esperado
+
+Ao final deste laboratório, a aplicação deve estar acessível por uma única URL:
 
 ```text
-Separar responsabilidades de infraestrutura.
-A aplicação executa a regra de negócio.
-O PostgreSQL persiste os dados.
-O Docker Compose orquestra a dependência local.
+http://localhost:8080
 ```
+
+Internamente, o Nginx distribui as requisições entre duas instâncias Spring Boot privadas, e ambas acessam o PostgreSQL também privado dentro da rede Docker.
+
+Esse laboratório consolida a ideia de **entrada única + serviços internos privados**, um dos fundamentos mais importantes para arquiteturas distribuídas e implantações em cloud.
