@@ -29,4 +29,6 @@ public class BusinessController {
         createUserUseCase.execute(domain);
         return ResponseEntity.status(HttpStatus.CREATED).build();
     }
+
+
 }
