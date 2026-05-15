@@ -1,17 +1,19 @@
-package system_design_user.v1.domain.vo;
+package system_design_user.v1.infra.persistence.entities;
 
+import jakarta.persistence.MappedSuperclass;
 
-public class Address {
+@MappedSuperclass
+public class AddressEntity {
 
     private String streetAddress;
     private String city;
     private String state;
     private Integer postalCode;
 
-    public Address() {
+    public AddressEntity() {
     }
 
-    public Address(String streetAddress, String city, String state, Integer postalCode) {
+    public AddressEntity(String streetAddress, String city, String state, Integer postalCode) {
         this.streetAddress = streetAddress;
         this.city = city;
         this.state = state;
@@ -48,15 +50,5 @@ public class Address {
 
     public void setPostalCode(Integer postalCode) {
         this.postalCode = postalCode;
-    }
-
-    @Override
-    public String toString() {
-        return "Address{" +
-                "streetAddress='" + streetAddress + '\'' +
-                ", city='" + city + '\'' +
-                ", state='" + state + '\'' +
-                ", postalCode=" + postalCode +
-                '}';
     }
 }

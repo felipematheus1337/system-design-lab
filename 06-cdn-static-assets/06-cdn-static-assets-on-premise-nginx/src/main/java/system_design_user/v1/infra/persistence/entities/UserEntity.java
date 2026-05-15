@@ -9,7 +9,6 @@ import java.util.List;
 @Entity(name = "tb_user")
 public class UserEntity {
 
-
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
@@ -20,7 +19,7 @@ public class UserEntity {
     private String lastName;
     @Column(nullable = false)
 
-    private Address address;
+    private AddressEntity address;
 
     private List<String> phoneNumbers;
 
