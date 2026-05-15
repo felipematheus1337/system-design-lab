@@ -20,4 +20,8 @@ spring:
 server:
   port: 8080
 
+assets:
+  base-path: ${ASSETS_BASE_PATH:./assets}
+  public-base-url: ${ASSETS_PUBLIC_BASE_URL:http://localhost:8081/assets}
+
 
