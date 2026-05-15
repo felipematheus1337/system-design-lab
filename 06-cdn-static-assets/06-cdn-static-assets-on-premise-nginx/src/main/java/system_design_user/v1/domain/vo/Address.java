@@ -1,5 +1,8 @@
 package system_design_user.v1.domain.vo;
 
+import jakarta.persistence.MappedSuperclass;
+
+@MappedSuperclass
 public class Address {
 
     private String streetAddress;
