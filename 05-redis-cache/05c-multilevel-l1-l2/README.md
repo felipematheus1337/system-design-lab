@@ -1,55 +1,54 @@
-# Redis Standalone Cache
+# 05c - Multilevel Cache L1/L2 with Caffeine and Redis
 
 ## Objetivo
 
-Demonstrar o uso de Redis como cache externo utilizando Spring Boot, PostgreSQL e RedisTemplate.
+Esta POC demonstra uma arquitetura de cache em múltiplos níveis usando:
+
+- Caffeine como cache local em memória, também chamado de L1.
+- Redis como cache externo e compartilhado, também chamado de L2.
+- PostgreSQL como fonte da verdade.
+
+O objetivo é mostrar como uma aplicação pode reduzir latência e carga no banco usando duas camadas de cache.
+
+---
 
 ## Arquitetura
 
-Cliente -> Spring Boot -> Redis -> PostgreSQL
+```mermaid
+flowchart TD
+    Client[Client / Postman / Browser]
 
-## Estratégia usada
+    subgraph Application["Spring Boot Application"]
+        Controller[ProductController]
+        Service[ProductService]
+        MultiCache[ProductMultilevelCacheService]
+        L1[(L1 Cache<br/>Caffeine<br/>In-memory)]
+    end
 
-Esta POC usa o padrão Cache-Aside.
+    subgraph ExternalCache["External Cache"]
+        L2[(L2 Cache<br/>Redis Standalone)]
+    end
 
-Fluxo de leitura:
+    subgraph Database["Database"]
+        DB[(PostgreSQL<br/>Source of Truth)]
+    end
 
-1. A aplicação consulta o Redis.
-2. Se o dado existir, retorna do cache.
-3. Se não existir, consulta o PostgreSQL.
-4. Salva o resultado no Redis com TTL.
-5. Retorna o dado ao cliente.
+    Client -->|HTTP Request| Controller
+    Controller --> Service
+    Service --> MultiCache
 
-Fluxo de atualização:
+    MultiCache -->|1. Try local memory| L1
+    L1 -->|L1 HIT| MultiCache
 
-1. A aplicação atualiza o dado no PostgreSQL.
-2. Remove a entrada correspondente do Redis.
-3. A próxima leitura recarrega o cache.
+    MultiCache -->|2. If L1 MISS, try Redis| L2
+    L2 -->|L2 HIT| MultiCache
 
-## Conceitos demonstrados
+    MultiCache -->|3. If L2 MISS, query DB| DB
+    DB -->|Product data| MultiCache
 
-- Redis standalone
-- Cache-aside pattern
-- Cache hit
-- Cache miss
-- TTL
-- Invalidação manual
-- RedisTemplate
-- Serialização JSON
-- Separação entre serviço de negócio e serviço de cache
+    MultiCache -->|Populate L2 with TTL| L2
+    MultiCache -->|Populate L1 with shorter TTL| L1
 
-## Trade-offs
-
-### Vantagens
-
-- Cache compartilhado entre múltiplas instâncias
-- Reduz carga no banco
-- TTL centralizado
-- Mais próximo de uma arquitetura distribuída real
-
-### Limitações
-
-- Há chamada de rede entre aplicação e Redis
-- Cache pode ficar temporariamente desatualizado
-- Exige estratégia explícita de invalidação
-- Redis vira uma dependência operacional
+    MultiCache --> Service
+    Service --> Controller
+    Controller -->|HTTP Response| Client
